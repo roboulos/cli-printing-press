@@ -289,6 +289,7 @@ Run '{{.Name}}-pp-cli doctor' to verify auth and connectivity.{{backtick}},
 	rootCmd.AddCommand(newAnalyticsCmd(flags))
 {{- end}}
 {{- if .VisionSet.Store}}
+	rootCmd.AddCommand(newSQLCmd(flags))
 	rootCmd.AddCommand(newWorkflowCmd(flags))
 {{- end}}
 {{- if .Share.Enabled}}

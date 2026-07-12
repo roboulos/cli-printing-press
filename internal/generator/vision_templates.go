@@ -27,6 +27,9 @@ type VisionTemplateSet struct {
 // when an API has an endpoint with the same name (e.g., /analytics).
 func (s VisionTemplateSet) CmdNames() map[string]bool {
 	names := map[string]bool{}
+	if s.Store {
+		names["sql"] = true
+	}
 	if s.Export {
 		names["export"] = true
 	}
@@ -211,6 +214,7 @@ func (s VisionTemplateSet) TemplateNames() []string {
 	}
 	if s.Store {
 		names = append(names, "store.go.tmpl")
+		names = append(names, "sql.go.tmpl")
 	}
 	if s.Search {
 		names = append(names, "search.go.tmpl")

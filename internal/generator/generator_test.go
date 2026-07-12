@@ -2208,6 +2208,88 @@ func TestGenerateMCPSQLToolUsesReadOnlyStore(t *testing.T) {
 		"behavioral coverage of comment-prefix and statement-separator bypass vectors must ship into every printed CLI's mcp package")
 }
 
+// TestGenerateCLISQLCommandForStore pins the human/agent CLI half of the
+// local-data contract. A generated store without a root-level sql command
+// leaves the typed MCP tool as the only route to ad-hoc joins and forces
+// shell users to hand-author the same framework command after every print.
+// The generated command must accept compound/CTE queries split across shell
+// arguments, reuse the read-only store handle, and send rows through the
+// shared output pipeline so --compact and --select keep their normal meaning.
+func TestGenerateCLISQLCommandForStore(t *testing.T) {
+	t.Parallel()
+
+	apiSpec := minimalSpec("sql-canary")
+	outputDir := filepath.Join(t.TempDir(), naming.CLI(apiSpec.Name))
+	gen := New(apiSpec, outputDir)
+	gen.VisionSet = VisionTemplateSet{Store: true}
+	require.NoError(t, gen.Generate())
+
+	sqlSrc, err := os.ReadFile(filepath.Join(outputDir, "internal", "cli", "sql.go"))
+	require.NoError(t, err, "every generated CLI with a local store must emit the sql framework command")
+	sqlCode := stripGoComments(string(sqlSrc))
+	assert.Contains(t, sqlCode, `Use: "sql [query...]"`)
+	assert.Contains(t, sqlCode, `strings.Join(args, " ")`,
+		"sql must preserve compound queries passed as multiple shell arguments")
+	assert.Contains(t, sqlCode, `store.OpenReadOnly(`,
+		"sql must use the same driver-enforced read-only store boundary as MCP")
+	assert.Contains(t, sqlCode, `printJSONFiltered(`,
+		"sql rows must flow through the shared --compact/--select output pipeline")
+	assert.Contains(t, sqlCode, `"SELECT"`)
+	assert.Contains(t, sqlCode, `"WITH"`,
+		"compound WITH...SELECT queries must be admitted")
+
+	rootSrc, err := os.ReadFile(filepath.Join(outputDir, "internal", "cli", "root.go"))
+	require.NoError(t, err)
+	assert.Contains(t, stripGoComments(string(rootSrc)), `rootCmd.AddCommand(newSQLCmd(flags))`,
+		"the generated sql command must be reachable from the root Cobra tree")
+
+	runGoCommand(t, outputDir, "build", "-o", filepath.Join(outputDir, naming.CLI(apiSpec.Name)), "./cmd/"+naming.CLI(apiSpec.Name))
+	helpOut, err := exec.Command(filepath.Join(outputDir, naming.CLI(apiSpec.Name)), "sql", "--help").CombinedOutput()
+	require.NoError(t, err, string(helpOut))
+	assert.Contains(t, string(helpOut), "Run read-only SQL")
+	assert.Contains(t, string(helpOut), "--compact")
+
+	dbPath := filepath.Join(outputDir, "sql-canary.db")
+	seedSrc := `package main
+
+import (
+	"database/sql"
+	"os"
+
+	_ "modernc.org/sqlite"
+)
+
+func main() {
+	db, err := sql.Open("sqlite", os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	defer db.Close()
+	if _, err := db.Exec("CREATE TABLE items (id TEXT, name TEXT, status TEXT, details TEXT); INSERT INTO items VALUES ('1', 'Alpha', 'ready', 'verbose')"); err != nil {
+		panic(err)
+	}
+}
+`
+	require.NoError(t, os.WriteFile(filepath.Join(outputDir, "seed_sql_canary.go"), []byte(seedSrc), 0o644))
+	runGoCommandRequired(t, outputDir, "run", "seed_sql_canary.go", dbPath)
+	queryOut, err := exec.Command(
+		filepath.Join(outputDir, naming.CLI(apiSpec.Name)),
+		"sql",
+		"WITH rows AS (SELECT id, name, status, details FROM items)",
+		"SELECT id, name, status, details FROM rows",
+		"--db", dbPath,
+		"--compact",
+		"--json",
+	).CombinedOutput()
+	require.NoError(t, err, string(queryOut))
+	var rows []map[string]any
+	require.NoError(t, json.Unmarshal(queryOut, &rows), string(queryOut))
+	require.Len(t, rows, 1)
+	assert.Equal(t, "Alpha", rows[0]["name"])
+	assert.Equal(t, "ready", rows[0]["status"])
+	assert.NotContains(t, rows[0], "details", "--compact must remove low-gravity SQL columns")
+}
+
 // stripGoComments removes // line comments and /* ... */ block comments from
 // Go source. Crude but sufficient for canary assertions on emitted templates;
 // it doesn't try to parse string literals (none of the asserted substrings

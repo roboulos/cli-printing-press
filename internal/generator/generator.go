@@ -2092,6 +2092,7 @@ func (g *Generator) renderVisionCommands(visionData visionRenderData) error {
 	visionCmds := map[string]string{
 		"export.go.tmpl":    filepath.Join("internal", "cli", "export.go"),
 		"import.go.tmpl":    filepath.Join("internal", "cli", "import.go"),
+		"sql.go.tmpl":       filepath.Join("internal", "cli", "sql.go"),
 		"search.go.tmpl":    filepath.Join("internal", "cli", "search.go"),
 		"sync.go.tmpl":      filepath.Join("internal", "cli", "sync.go"),
 		"tail.go.tmpl":      filepath.Join("internal", "cli", "tail.go"),
