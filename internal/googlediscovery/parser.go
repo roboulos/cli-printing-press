@@ -189,7 +189,15 @@ func (c *convCtx) convertTopResource(resName string, res *discResource) spec.Res
 	endpointNames := make(map[string]spec.Endpoint)
 	for methodName, method := range res.Methods {
 		m := method
-		if m.SupportsMediaUpload {
+		// Media-upload methods were skipped WHOLESALE, which dropped verbs that
+		// ALSO accept a plain JSON body on the non-upload path (gmail
+		// drafts.create/send, messages.send/insert all take
+		// {"message":{"raw":"<base64url RFC822>"}} at the standard REST path) -
+		// the highest-value staged-write verbs in the gmail fleet
+		// (snappy DEMANDS-2026-07-13-gmail-draft-create). Emit the JSON-body
+		// form when the method declares a request schema; skip only pure-upload
+		// methods with no JSON body at all.
+		if m.SupportsMediaUpload && m.Request == nil {
 			continue
 		}
 		ep := c.convertMethod(&m)
@@ -237,7 +245,15 @@ func (c *convCtx) convertShallowResource(res *discResource) spec.Resource {
 	endpointNames := make(map[string]spec.Endpoint)
 	for methodName, method := range res.Methods {
 		m := method
-		if m.SupportsMediaUpload {
+		// Media-upload methods were skipped WHOLESALE, which dropped verbs that
+		// ALSO accept a plain JSON body on the non-upload path (gmail
+		// drafts.create/send, messages.send/insert all take
+		// {"message":{"raw":"<base64url RFC822>"}} at the standard REST path) -
+		// the highest-value staged-write verbs in the gmail fleet
+		// (snappy DEMANDS-2026-07-13-gmail-draft-create). Emit the JSON-body
+		// form when the method declares a request schema; skip only pure-upload
+		// methods with no JSON body at all.
+		if m.SupportsMediaUpload && m.Request == nil {
 			continue
 		}
 		ep := c.convertMethod(&m)
