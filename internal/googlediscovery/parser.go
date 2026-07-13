@@ -4,10 +4,13 @@
 // case: resource/method traversal, path+query parameters, request/response
 // schema $ref resolution, and OAuth2 bearer auth detection.
 //
+// Methods that advertise supportsMediaUpload still expose an ordinary JSON
+// REST endpoint (path + httpMethod + request $ref), and Discovery describes
+// the alternate media-upload URL in a separate mediaUpload.protocols block.
+// The converter keeps the JSON endpoint; the two-URL upload negotiation is
+// out of scope and is not emitted as a command variant.
+//
 // Known gaps (documented, not blocking):
-//   - Media upload endpoints (resumable + multipart) are skipped; their
-//     protocol differs significantly from JSON REST and OpenAPI cannot
-//     represent the two-URL upload negotiation cleanly.
 //   - Enum schema types with complex "enumDescriptions" get flattened to
 //     string with the values preserved in the Enum slice.
 //   - Deeply nested anonymous schemas are inlined rather than promoted to
@@ -192,9 +195,6 @@ func (c *convCtx) convertTopResource(resName string, res *discResource) spec.Res
 	endpointNames := make(map[string]spec.Endpoint)
 	for methodName, method := range res.Methods {
 		m := method
-		if m.SupportsMediaUpload {
-			continue
-		}
 		ep := c.convertMethod(&m)
 		epName := endpointName(methodName, m.HTTPMethod, ep.Path)
 		if _, exists := endpointNames[epName]; exists {
@@ -240,9 +240,6 @@ func (c *convCtx) convertShallowResource(res *discResource) spec.Resource {
 	endpointNames := make(map[string]spec.Endpoint)
 	for methodName, method := range res.Methods {
 		m := method
-		if m.SupportsMediaUpload {
-			continue
-		}
 		ep := c.convertMethod(&m)
 		epName := endpointName(methodName, m.HTTPMethod, ep.Path)
 		if _, exists := endpointNames[epName]; exists {
