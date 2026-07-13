@@ -2066,23 +2066,45 @@ func synthesizeForceRegenBase(snapshotDir string, currentSpecBytes []byte, novel
 	}
 	moduleVersion := strings.TrimPrefix(priorVersion, "v")
 	moduleVersion = "v" + moduleVersion
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
-	defer cancel()
-	cmd := exec.CommandContext(ctx, "go", "run", forceRegenCommandModulePath(moduleVersion)+"@"+moduleVersion,
-		"generate", "--spec", specPath, "--output", baseDir, "--validate=false")
 	fmt.Fprintf(os.Stderr, "Synthesizing force-regen base with cli-printing-press %s (this may take a moment)...\n", moduleVersion)
-	out, err := cmd.CombinedOutput()
-	if ctx.Err() == context.DeadlineExceeded {
-		fmt.Fprintf(os.Stderr, "warning: force-regen base synthesis with cli-printing-press %s timed out; falling back to two-way merge\n", moduleVersion)
-		cleanup()
-		return "", nil
+
+	candidates := forceRegenCommandModulePaths(moduleVersion)
+	var (
+		lastErr error
+		lastOut []byte
+	)
+	for i, modulePath := range candidates {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		cmd := exec.CommandContext(ctx, "go", "run", modulePath+"@"+moduleVersion,
+			"generate", "--spec", specPath, "--output", baseDir, "--validate=false")
+		out, err := cmd.CombinedOutput()
+		timedOut := ctx.Err() == context.DeadlineExceeded
+		cancel()
+		if timedOut {
+			fmt.Fprintf(os.Stderr, "warning: force-regen base synthesis with cli-printing-press %s timed out; falling back to two-way merge\n", moduleVersion)
+			cleanup()
+			return "", nil
+		}
+		if err == nil {
+			return baseDir, cleanup
+		}
+		lastErr, lastOut = err, out
+		// Only fall through to the next candidate when the module simply
+		// doesn't ship this entrypoint (historical tagged modules published
+		// cmd/printing-press instead of cmd/cli-printing-press). Any other
+		// failure is a real crash — reporting and giving up is correct.
+		if i == len(candidates)-1 || !moduleMissingEntrypoint(out) {
+			break
+		}
+		fmt.Fprintf(os.Stderr, "note: %s@%s does not ship %s; retrying with historical entrypoint\n",
+			moduleForCandidate(modulePath), moduleVersion, modulePath)
+		// Wipe any partial output the failed attempt left behind so the next
+		// candidate starts from a clean baseDir.
+		_ = os.RemoveAll(baseDir)
 	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: force-regen base synthesis with cli-printing-press %s failed: %v\n%s", moduleVersion, err, out)
-		cleanup()
-		return "", nil
-	}
-	return baseDir, cleanup
+	fmt.Fprintf(os.Stderr, "warning: force-regen base synthesis with cli-printing-press %s failed: %v\n%s", moduleVersion, lastErr, lastOut)
+	cleanup()
+	return "", nil
 }
 
 func sameSemver(a, b string) bool {
@@ -2095,13 +2117,39 @@ func validPrintingPressVersion(v string) bool {
 	return printingPressVersionPattern.MatchString(strings.TrimSpace(v))
 }
 
-func forceRegenCommandModulePath(moduleVersion string) string {
+// forceRegenCommandModulePaths returns the candidate `go run` package paths
+// for the generator entrypoint at moduleVersion, primary first. The current
+// entrypoint is cmd/cli-printing-press; historical tagged modules shipped
+// only cmd/printing-press. Base synthesis tries each in order and falls
+// through only on the specific "does not contain package" go-run error.
+func forceRegenCommandModulePaths(moduleVersion string) []string {
 	major := printingPressMajor(moduleVersion)
 	base := "github.com/mvanhorn/cli-printing-press"
 	if major >= 2 {
 		base += "/v" + strconv.Itoa(major)
 	}
-	return base + "/cmd/cli-printing-press"
+	return []string{
+		base + "/cmd/cli-printing-press",
+		base + "/cmd/printing-press",
+	}
+}
+
+// moduleForCandidate strips the `/cmd/<name>` suffix from a candidate package
+// path so retry warnings can name the module without leaking the entrypoint.
+func moduleForCandidate(pkg string) string {
+	if i := strings.LastIndex(pkg, "/cmd/"); i >= 0 {
+		return pkg[:i]
+	}
+	return pkg
+}
+
+// moduleMissingEntrypoint returns true when go-run failed because the
+// requested package is not present in the tagged module (as opposed to a
+// real crash inside the generator). This is the exact class of failure that
+// used to silently fall through to a two-way merge and overwrite the fresh
+// tree with stale hand-edits.
+func moduleMissingEntrypoint(out []byte) bool {
+	return strings.Contains(string(out), "does not contain package")
 }
 
 func printingPressMajor(moduleVersion string) int {

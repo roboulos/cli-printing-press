@@ -319,18 +319,65 @@ func Execute() {}
 	assert.DirExists(t, snapshotDir, "failed post-merge validation must leave the recovery snapshot in place")
 }
 
-func TestForceRegenCommandModulePathMatchesVersionMajor(t *testing.T) {
+func TestForceRegenCommandModulePathsMatchVersionMajor(t *testing.T) {
 	t.Parallel()
 
-	assert.Equal(t,
-		"github.com/mvanhorn/cli-printing-press/cmd/cli-printing-press",
-		forceRegenCommandModulePath("v1.9.0"))
-	assert.Equal(t,
-		"github.com/mvanhorn/cli-printing-press/v3/cmd/cli-printing-press",
-		forceRegenCommandModulePath("3.7.0"))
-	assert.Equal(t,
-		"github.com/mvanhorn/cli-printing-press/v4/cmd/cli-printing-press",
-		forceRegenCommandModulePath("v4.19.0"))
+	// The current generator entrypoint is cmd/cli-printing-press; historical
+	// tagged modules (through v4.2.2 at the time of the rename) shipped only
+	// cmd/printing-press. Base synthesis must offer both candidates so a
+	// snapshot tagged with a historical version can still resolve.
+	for _, tc := range []struct {
+		version string
+		want    []string
+	}{
+		{
+			version: "v1.9.0",
+			want: []string{
+				"github.com/mvanhorn/cli-printing-press/cmd/cli-printing-press",
+				"github.com/mvanhorn/cli-printing-press/cmd/printing-press",
+			},
+		},
+		{
+			version: "3.7.0",
+			want: []string{
+				"github.com/mvanhorn/cli-printing-press/v3/cmd/cli-printing-press",
+				"github.com/mvanhorn/cli-printing-press/v3/cmd/printing-press",
+			},
+		},
+		{
+			version: "v4.2.2",
+			want: []string{
+				"github.com/mvanhorn/cli-printing-press/v4/cmd/cli-printing-press",
+				"github.com/mvanhorn/cli-printing-press/v4/cmd/printing-press",
+			},
+		},
+		{
+			version: "v4.19.0",
+			want: []string{
+				"github.com/mvanhorn/cli-printing-press/v4/cmd/cli-printing-press",
+				"github.com/mvanhorn/cli-printing-press/v4/cmd/printing-press",
+			},
+		},
+	} {
+		assert.Equal(t, tc.want, forceRegenCommandModulePaths(tc.version),
+			"version %s", tc.version)
+	}
+}
+
+func TestModuleMissingEntrypointIdentifiesGoRunFailure(t *testing.T) {
+	t.Parallel()
+
+	// This is the exact class of failure that led to the two-way-merge
+	// fallback overwriting fresh generated files with stale hand-edits when
+	// synthesizing a base from v4.2.2 (which has no cmd/cli-printing-press).
+	assert.True(t, moduleMissingEntrypoint([]byte(
+		"module github.com/mvanhorn/cli-printing-press/v4@v4.2.2 found (v4.2.2), "+
+			"but does not contain package github.com/mvanhorn/cli-printing-press/v4/cmd/cli-printing-press\n")))
+	// Any other go run failure must not trigger the historical fallback:
+	// blindly retrying would double the wall time and mask real crashes.
+	assert.False(t, moduleMissingEntrypoint([]byte(
+		"panic: something else went wrong\n")))
+	assert.False(t, moduleMissingEntrypoint(nil))
 }
 
 func TestGenerateDeviceSpecArchiveUsesRenamedCLIName(t *testing.T) {
